@@ -1,134 +1,99 @@
-    import React, { useState } from 'react';
-    //Step 1 - Task 1
-    import {urlConfig} from '../../config';
+const express = require('express');
+const bcryptjs = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const connectToDatabase = require('../models/db');
+const router = express.Router();
+const dotenv = require('dotenv');
+const pino = require('pino');  // Import Pino logger
+dotenv.config();
 
-    //Step 1 - Task 2
-    import { useAppContext } from '../../context/AuthContext';
+const logger = pino();  // Create a Pino logger instance
 
-    //Step 1 - Task 3
-    import { useNavigate } from 'react-router-dom';
+//Create JWT secret
+dotenv.config();
+const JWT_SECRET = process.env.JWT_SECRET;
 
-    import './RegisterPage.css';
+router.post('/register', async (req, res) => {
+    try {
+      //Connect to `giftsdb` in MongoDB through `connectToDatabase` in `db.js`.
+      const db = await connectToDatabase();
 
-    function RegisterPage() {
-        const [firstName, setFirstName] = useState('');
-        const [lastName, setLastName] = useState('');
-        const [email, setEmail] = useState('');
-        const [password, setPassword] = useState('');
+      //Access the `users` collection
+      const collection = db.collection("users");
 
-        //Step 1 - Task 4
-         const [showerr, setShowerr] = useState('');
+      //Check for existing email in DB
+      const existingEmail = await collection.findOne({ email: req.body.email });
 
-        //Step 1 - Task 5
-        const navigate = useNavigate();
-        const { setIsLoggedIn } = useAppContext();
-
-        const handleRegister = async () => {
-            const response = await fetch(`${urlConfig.backendUrl}/api/auth/register`, {
-                //Step 1 - Task 6
-                method: 'POST',
-                //Step 1 - Task 7
-                headers: {
-                    'content-type': 'application/json',
-                },
-                //Step 1 - Task 8
-                body: JSON.stringify({
-                    firstName: firstName,
-                    lastName: lastName,
-                    email: email,
-                    password: password
-                })
-            });
-
-            //Step 2 - Task 1
-            const json = await response.json();
-            console.log('json data', json);
-            console.log('er', json.error);
-
-            //Step 2 - Task 2
-            if (json.authtoken) {
-                sessionStorage.setItem('auth-token', json.authtoken);
-                sessionStorage.setItem('name', firstName);
-                sessionStorage.setItem('email', json.email);
-            //Step 2 - Task 3
-                setIsLoggedIn(true);
-            //Step 2 - Task 4
-                navigate('/app');
-            }
-            if (json.error) {
-            //Step 2 - Task 5
-                setShowerr(json.error);
-            }
+        if (existingEmail) {
+            logger.error('Email id already exists');
+            return res.status(400).json({ error: 'Email id already exists' });
         }
 
-        return (
-            <div className="container mt-5">
-                <div className="row justify-content-center">
-                    <div className="col-md-6 col-lg-4">
-                        <div className="register-card p-4 border rounded">
-                            <h2 className="text-center mb-4 font-weight-bold">Register</h2>
-                            <div className="mb-3">
-                                <label htmlFor="firstName" className="form-label">FirstName</label>
-                                <input
-                                    id="firstName"
-                                    type="text"
-                                    className="form-control"
-                                    placeholder="Enter your firstName"
-                                    value={firstName}
-                                    onChange={(e) => setFirstName(e.target.value)}
-                                />
-                            </div>
+        const salt = await bcryptjs.genSalt(10);
+        const hash = await bcryptjs.hash(req.body.password, salt);
+        const email=req.body.email;
 
-                            {/* last name */}
+        //Save user details
+        const newUser = await collection.insertOne({
+            email: req.body.email,
+            firstName: req.body.firstName,
+            lastName: req.body.lastName,
+            password: hash,
+            createdAt: new Date(),
+        });
 
-                            <div className="mb-3">
-                                <label htmlFor="lastName" className="form-label">LastName</label>
-                                <input
-                                    id="lastName"
-                                    type="text"
-                                    className="form-control"
-                                    placeholder="Enter your lastName"
-                                    value={lastName}
-                                    onChange={(e) => setLastName(e.target.value)}
-                                />
-                            </div>
+        const payload = {
+            user: {
+                id: newUser.insertedId,
+            },
+        };
 
-                            {/* email  */}
-                            <div className="mb-3">
-                                <label htmlFor="email" className="form-label">Email</label>
-                                <input
-                                    id="email"
-                                    type="text"
-                                    className="form-control"
-                                    placeholder="Enter your email"
-                                    value={email}
-                                    onChange={(e) => setEmail(e.target.value)}
-                                />
-                            {/* Step 2 - Task 6*/}
-
-                                    <div className="text-danger">{showerr}</div>
-                            </div>
-
-                            <div className="mb-4">
-                                <label htmlFor="password" className="form-label">Password</label>
-                                <input
-                                    id="password"
-                                    type="password"
-                                    className="form-control"
-                                    placeholder="Enter your password"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                />
-                            </div>
-                            <button className="btn btn-primary w-100 mb-3" onClick={handleRegister}>Register</button>
-                            <p className="mt-4 text-center">
-                                Already a member? <a href="/app/login" className="text-primary">Login</a>
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        );
+        //Create JWT
+        const authtoken = jwt.sign(payload, JWT_SECRET);
+        logger.info('User registered successfully');
+        res.json({ authtoken,email });
+    } catch (e) {
+        logger.error(e);
+        return res.status(500).send('Internal server error');
     }
+});
 
-    export default RegisterPage;
+    //Login Endpoint
+router.post('/login', async (req, res) => {
+    console.log("\n\n Inside login")
+
+    try {
+        // const collection = await connectToDatabase();
+        const db = await connectToDatabase();
+        const collection = db.collection("users");
+        const theUser = await collection.findOne({ email: req.body.email });
+
+        if (theUser) {
+            let result = await bcryptjs.compare(req.body.password, theUser.password)
+            if(!result) {
+                logger.error('Passwords do not match');
+                return res.status(404).json({ error: 'Wrong pasword' });
+            }
+            let payload = {
+                user: {
+                    id: theUser._id.toString(),
+                },
+            };
+
+            const userName = theUser.firstName;
+            const userEmail = theUser.email;
+
+            const authtoken = jwt.sign(payload, JWT_SECRET);
+            logger.info('User logged in successfully');
+            return res.status(200).json({ authtoken, userName, userEmail });
+        } else {
+            logger.error('User not found');
+            return res.status(404).json({ error: 'User not found' });
+        }
+    } catch (e) {
+        logger.error(e);
+        return res.status(500).json({ error: 'Internal server error', details: e.message });
+      }
+});
+
+module.exports = router;
